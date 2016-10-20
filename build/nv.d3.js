@@ -1584,6 +1584,235 @@ nv.utils.arrayEquals = function (array1, array2) {
     }
     return true;
 };
+
+nv.models.line = function() {
+    "use strict";
+    //============================================================
+    // Public Variables with Default Settings
+    //------------------------------------------------------------
+
+    var  scatter = nv.models.scatter()
+        ;
+
+    var margin = {top: 0, right: 0, bottom: 0, left: 0}
+        , width = 960
+        , height = 500
+        , container = null
+        , strokeWidth = 1.5
+        , color = nv.utils.defaultColor() // a function that returns a color
+        , getX = function(d) { return d.x } // accessor to get the x value from a data point
+        , getY = function(d) { return d.y } // accessor to get the y value from a data point
+        , defined = function(d,i) { return !isNaN(getY(d,i)) && getY(d,i) !== null } // allows a line to be not continuous when it is not defined
+        , isArea = function(d) { return d.area } // decides if a line is an area or just a line
+        , clipEdge = false // if true, masks lines within x and y scale
+        , x //can be accessed via chart.xScale()
+        , y //can be accessed via chart.yScale()
+        , interpolate = "linear" // controls the line interpolation
+        , duration = 250
+        , dispatch = d3.dispatch('elementClick', 'elementMouseover', 'elementMouseout', 'renderEnd')
+        ;
+
+    scatter
+        .pointSize(16) // default size
+        .pointDomain([16,256]) //set to speed up calculation, needs to be unset if there is a custom size accessor
+    ;
+
+    //============================================================
+
+
+    //============================================================
+    // Private Variables
+    //------------------------------------------------------------
+
+    var x0, y0 //used to store previous scales
+        , renderWatch = nv.utils.renderWatch(dispatch, duration)
+        ;
+
+    //============================================================
+
+
+    function chart(selection) {
+        renderWatch.reset();
+        renderWatch.models(scatter);
+        selection.each(function(data) {
+            container = d3.select(this);
+            var availableWidth = nv.utils.availableWidth(width, container, margin),
+                availableHeight = nv.utils.availableHeight(height, container, margin);
+            nv.utils.initSVG(container);
+
+            // Setup Scales
+            x = scatter.xScale();
+            y = scatter.yScale();
+
+            x0 = x0 || x;
+            y0 = y0 || y;
+
+            // Setup containers and skeleton of chart
+            var wrap = container.selectAll('g.nv-wrap.nv-line').data([data]);
+            var wrapEnter = wrap.enter().append('g').attr('class', 'nvd3 nv-wrap nv-line');
+            var defsEnter = wrapEnter.append('defs');
+            var gEnter = wrapEnter.append('g');
+            var g = wrap.select('g');
+
+            gEnter.append('g').attr('class', 'nv-groups');
+            gEnter.append('g').attr('class', 'nv-scatterWrap');
+
+            wrap.attr('transform', 'translate(' + margin.left + ',' + margin.top + ')');
+
+            scatter
+                .width(availableWidth)
+                .height(availableHeight);
+
+            var scatterWrap = wrap.select('.nv-scatterWrap');
+            scatterWrap.call(scatter);
+
+            defsEnter.append('clipPath')
+                .attr('id', 'nv-edge-clip-' + scatter.id())
+                .append('rect');
+
+            wrap.select('#nv-edge-clip-' + scatter.id() + ' rect')
+                .attr('width', availableWidth)
+                .attr('height', (availableHeight > 0) ? availableHeight : 0);
+
+            g   .attr('clip-path', clipEdge ? 'url(#nv-edge-clip-' + scatter.id() + ')' : '');
+            scatterWrap
+                .attr('clip-path', clipEdge ? 'url(#nv-edge-clip-' + scatter.id() + ')' : '');
+
+            var groups = wrap.select('.nv-groups').selectAll('.nv-group')
+                .data(function(d) { return d }, function(d) { return d.key });
+            groups.enter().append('g')
+                .style('stroke-opacity', 1e-6)
+                .style('stroke-width', function(d) { return d.strokeWidth || strokeWidth })
+                .style('fill-opacity', 1e-6);
+
+            groups.exit().remove();
+
+            groups
+                .attr('class', function(d,i) {
+                    return (d.classed || '') + ' nv-group nv-series-' + i;
+                })
+                .classed('hover', function(d) { return d.hover })
+                .style('fill', function(d,i){ return color(d, i) })
+                .style('stroke', function(d,i){ return color(d, i)});
+            groups.watchTransition(renderWatch, 'line: groups')
+                .style('stroke-opacity', 1)
+                .style('fill-opacity', function(d) { return d.fillOpacity || .5});
+
+            var areaPaths = groups.selectAll('path.nv-area')
+                .data(function(d) { return isArea(d) ? [d] : [] }); // this is done differently than lines because I need to check if series is an area
+            areaPaths.enter().append('path')
+                .attr('class', 'nv-area')
+                .attr('d', function(d) {
+                    return d3.svg.area()
+                        .interpolate(interpolate)
+                        .defined(defined)
+                        .x(function(d,i) { return nv.utils.NaNtoZero(x0(getX(d,i))) })
+                        .y0(function(d,i) { return nv.utils.NaNtoZero(y0(getY(d,i))) })
+                        .y1(function(d,i) { return y0( y.domain()[0] <= 0 ? y.domain()[1] >= 0 ? 0 : y.domain()[1] : y.domain()[0] ) })
+                        //.y1(function(d,i) { return y0(0) }) //assuming 0 is within y domain.. may need to tweak this
+                        .apply(this, [d.values])
+                });
+            groups.exit().selectAll('path.nv-area')
+                .remove();
+
+            areaPaths.watchTransition(renderWatch, 'line: areaPaths')
+                .attr('d', function(d) {
+                    return d3.svg.area()
+                        .interpolate(interpolate)
+                        .defined(defined)
+                        .x(function(d,i) { return nv.utils.NaNtoZero(x(getX(d,i))) })
+                        .y0(function(d,i) { return nv.utils.NaNtoZero(y(getY(d,i))) })
+                        .y1(function(d,i) { return y( y.domain()[0] <= 0 ? y.domain()[1] >= 0 ? 0 : y.domain()[1] : y.domain()[0] ) })
+                        //.y1(function(d,i) { return y0(0) }) //assuming 0 is within y domain.. may need to tweak this
+                        .apply(this, [d.values])
+                });
+
+            var linePaths = groups.selectAll('path.nv-line')
+                .data(function(d) { return [d.values] });
+
+            linePaths.enter().append('path')
+                .attr('class', 'nv-line')
+                .attr('d',
+                    d3.svg.line()
+                    .interpolate(interpolate)
+                    .defined(defined)
+                    .x(function(d,i) { return nv.utils.NaNtoZero(x0(getX(d,i))) })
+                    .y(function(d,i) { return nv.utils.NaNtoZero(y0(getY(d,i))) })
+            );
+
+            linePaths.watchTransition(renderWatch, 'line: linePaths')
+                .attr('d',
+                    d3.svg.line()
+                    .interpolate(interpolate)
+                    .defined(defined)
+                    .x(function(d,i) { return nv.utils.NaNtoZero(x(getX(d,i))) })
+                    .y(function(d,i) { return nv.utils.NaNtoZero(y(getY(d,i))) })
+            );
+
+            //store old scales for use in transitions on update
+            x0 = x.copy();
+            y0 = y.copy();
+        });
+        renderWatch.renderEnd('line immediate');
+        return chart;
+    }
+
+
+    //============================================================
+    // Expose Public Variables
+    //------------------------------------------------------------
+
+    chart.dispatch = dispatch;
+    chart.scatter = scatter;
+    // Pass through events
+    scatter.dispatch.on('elementClick', function(){ dispatch.elementClick.apply(this, arguments); });
+    scatter.dispatch.on('elementMouseover', function(){ dispatch.elementMouseover.apply(this, arguments); });
+    scatter.dispatch.on('elementMouseout', function(){ dispatch.elementMouseout.apply(this, arguments); });
+
+    chart.options = nv.utils.optionsFunc.bind(chart);
+
+    chart._options = Object.create({}, {
+        // simple options, just get/set the necessary values
+        width:      {get: function(){return width;}, set: function(_){width=_;}},
+        height:     {get: function(){return height;}, set: function(_){height=_;}},
+        defined: {get: function(){return defined;}, set: function(_){defined=_;}},
+        interpolate:      {get: function(){return interpolate;}, set: function(_){interpolate=_;}},
+        clipEdge:    {get: function(){return clipEdge;}, set: function(_){clipEdge=_;}},
+
+        // options that require extra logic in the setter
+        margin: {get: function(){return margin;}, set: function(_){
+            margin.top    = _.top    !== undefined ? _.top    : margin.top;
+            margin.right  = _.right  !== undefined ? _.right  : margin.right;
+            margin.bottom = _.bottom !== undefined ? _.bottom : margin.bottom;
+            margin.left   = _.left   !== undefined ? _.left   : margin.left;
+        }},
+        duration: {get: function(){return duration;}, set: function(_){
+            duration = _;
+            renderWatch.reset(duration);
+            scatter.duration(duration);
+        }},
+        isArea: {get: function(){return isArea;}, set: function(_){
+            isArea = d3.functor(_);
+        }},
+        x: {get: function(){return getX;}, set: function(_){
+            getX = _;
+            scatter.x(_);
+        }},
+        y: {get: function(){return getY;}, set: function(_){
+            getY = _;
+            scatter.y(_);
+        }},
+        color:  {get: function(){return color;}, set: function(_){
+            color = nv.utils.getColor(_);
+            scatter.color(color);
+        }}
+    });
+
+    nv.utils.inheritOptions(chart, scatter);
+    nv.utils.initOptions(chart);
+
+    return chart;
+};
 nv.models.lineChart = function() {
     "use strict";
 
@@ -2137,6 +2366,260 @@ nv.models.lineWithFocusChart = function() {
     .margin({ bottom: 30 })
     .focusEnable( true );
 };
+//TODO: consider deprecating by adding necessary features to multiBar model
+nv.models.discreteBar = function() {
+    "use strict";
+
+    //============================================================
+    // Public Variables with Default Settings
+    //------------------------------------------------------------
+
+    var margin = {top: 0, right: 0, bottom: 0, left: 0}
+        , width = 960
+        , height = 500
+        , id = Math.floor(Math.random() * 10000) //Create semi-unique ID in case user doesn't select one
+        , container
+        , x = d3.scale.ordinal()
+        , y = d3.scale.linear()
+        , getX = function(d) { return d.x }
+        , getY = function(d) { return d.y }
+        , forceY = [0] // 0 is forced by default.. this makes sense for the majority of bar graphs... user can always do chart.forceY([]) to remove
+        , color = nv.utils.defaultColor()
+        , showValues = false
+        , valueFormat = d3.format(',.2f')
+        , xDomain
+        , yDomain
+        , xRange
+        , yRange
+        , dispatch = d3.dispatch('chartClick', 'elementClick', 'elementDblClick', 'elementMouseover', 'elementMouseout', 'elementMousemove', 'renderEnd')
+        , rectClass = 'discreteBar'
+        , duration = 250
+        ;
+
+    //============================================================
+    // Private Variables
+    //------------------------------------------------------------
+
+    var x0, y0;
+    var renderWatch = nv.utils.renderWatch(dispatch, duration);
+
+    function chart(selection) {
+        renderWatch.reset();
+        selection.each(function(data) {
+            var availableWidth = width - margin.left - margin.right,
+                availableHeight = height - margin.top - margin.bottom;
+
+            container = d3.select(this);
+            nv.utils.initSVG(container);
+
+            //add series index to each data point for reference
+            data.forEach(function(series, i) {
+                series.values.forEach(function(point) {
+                    point.series = i;
+                });
+            });
+
+            // Setup Scales
+            // remap and flatten the data for use in calculating the scales' domains
+            var seriesData = (xDomain && yDomain) ? [] : // if we know xDomain and yDomain, no need to calculate
+                data.map(function(d) {
+                    return d.values.map(function(d,i) {
+                        return { x: getX(d,i), y: getY(d,i), y0: d.y0 }
+                    })
+                });
+
+            x   .domain(xDomain || d3.merge(seriesData).map(function(d) { return d.x }))
+                .rangeBands(xRange || [0, availableWidth], .1);
+            y   .domain(yDomain || d3.extent(d3.merge(seriesData).map(function(d) { return d.y }).concat(forceY)));
+
+            // If showValues, pad the Y axis range to account for label height
+            if (showValues) y.range(yRange || [availableHeight - (y.domain()[0] < 0 ? 12 : 0), y.domain()[1] > 0 ? 12 : 0]);
+            else y.range(yRange || [availableHeight, 0]);
+
+            //store old scales if they exist
+            x0 = x0 || x;
+            y0 = y0 || y.copy().range([y(0),y(0)]);
+
+            // Setup containers and skeleton of chart
+            var wrap = container.selectAll('g.nv-wrap.nv-discretebar').data([data]);
+            var wrapEnter = wrap.enter().append('g').attr('class', 'nvd3 nv-wrap nv-discretebar');
+            var gEnter = wrapEnter.append('g');
+            var g = wrap.select('g');
+
+            gEnter.append('g').attr('class', 'nv-groups');
+            wrap.attr('transform', 'translate(' + margin.left + ',' + margin.top + ')');
+
+            //TODO: by definition, the discrete bar should not have multiple groups, will modify/remove later
+            var groups = wrap.select('.nv-groups').selectAll('.nv-group')
+                .data(function(d) { return d }, function(d) { return d.key });
+            groups.enter().append('g')
+                .style('stroke-opacity', 1e-6)
+                .style('fill-opacity', 1e-6);
+            groups.exit()
+                .watchTransition(renderWatch, 'discreteBar: exit groups')
+                .style('stroke-opacity', 1e-6)
+                .style('fill-opacity', 1e-6)
+                .remove();
+            groups
+                .attr('class', function(d,i) { return 'nv-group nv-series-' + i })
+                .classed('hover', function(d) { return d.hover });
+            groups
+                .watchTransition(renderWatch, 'discreteBar: groups')
+                .style('stroke-opacity', 1)
+                .style('fill-opacity', .75);
+
+            var bars = groups.selectAll('g.nv-bar')
+                .data(function(d) { return d.values });
+            bars.exit().remove();
+
+            var barsEnter = bars.enter().append('g')
+                .attr('transform', function(d,i,j) {
+                    return 'translate(' + (x(getX(d,i)) + x.rangeBand() * .05 ) + ', ' + y(0) + ')'
+                })
+                .on('mouseover', function(d,i) { //TODO: figure out why j works above, but not here
+                    d3.select(this).classed('hover', true);
+                    dispatch.elementMouseover({
+                        data: d,
+                        index: i,
+                        color: d3.select(this).style("fill")
+                    });
+                })
+                .on('mouseout', function(d,i) {
+                    d3.select(this).classed('hover', false);
+                    dispatch.elementMouseout({
+                        data: d,
+                        index: i,
+                        color: d3.select(this).style("fill")
+                    });
+                })
+                .on('mousemove', function(d,i) {
+                    dispatch.elementMousemove({
+                        data: d,
+                        index: i,
+                        color: d3.select(this).style("fill")
+                    });
+                })
+                .on('click', function(d,i) {
+                    var element = this;
+                    dispatch.elementClick({
+                        data: d,
+                        index: i,
+                        color: d3.select(this).style("fill"),
+                        event: d3.event,
+                        element: element
+                    });
+                    d3.event.stopPropagation();
+                })
+                .on('dblclick', function(d,i) {
+                    dispatch.elementDblClick({
+                        data: d,
+                        index: i,
+                        color: d3.select(this).style("fill")
+                    });
+                    d3.event.stopPropagation();
+                });
+
+            barsEnter.append('rect')
+                .attr('height', 0)
+                .attr('width', x.rangeBand() * .9 / data.length )
+
+            if (showValues) {
+                barsEnter.append('text')
+                    .attr('text-anchor', 'middle')
+                ;
+
+                bars.select('text')
+                    .text(function(d,i) { return valueFormat(getY(d,i)) })
+                    .watchTransition(renderWatch, 'discreteBar: bars text')
+                    .attr('x', x.rangeBand() * .9 / 2)
+                    .attr('y', function(d,i) { return getY(d,i) < 0 ? y(getY(d,i)) - y(0) + 12 : -4 })
+
+                ;
+            } else {
+                bars.selectAll('text').remove();
+            }
+
+            bars
+                .attr('class', function(d,i) { return getY(d,i) < 0 ? 'nv-bar negative' : 'nv-bar positive' })
+                .style('fill', function(d,i) { return d.color || color(d,i) })
+                .style('stroke', function(d,i) { return d.color || color(d,i) })
+                .select('rect')
+                .attr('class', rectClass)
+                .watchTransition(renderWatch, 'discreteBar: bars rect')
+                .attr('width', x.rangeBand() * .9 / data.length);
+            bars.watchTransition(renderWatch, 'discreteBar: bars')
+                //.delay(function(d,i) { return i * 1200 / data[0].values.length })
+                .attr('transform', function(d,i) {
+                    var left = x(getX(d,i)) + x.rangeBand() * .05,
+                        top = getY(d,i) < 0 ?
+                            y(0) :
+                                y(0) - y(getY(d,i)) < 1 ?
+                            y(0) - 1 : //make 1 px positive bars show up above y=0
+                            y(getY(d,i));
+
+                    return 'translate(' + left + ', ' + top + ')'
+                })
+                .select('rect')
+                .attr('height', function(d,i) {
+                    return  Math.max(Math.abs(y(getY(d,i)) - y(0)), 1)
+                });
+
+
+            //store old scales for use in transitions on update
+            x0 = x.copy();
+            y0 = y.copy();
+
+        });
+
+        renderWatch.renderEnd('discreteBar immediate');
+        return chart;
+    }
+
+    //============================================================
+    // Expose Public Variables
+    //------------------------------------------------------------
+
+    chart.dispatch = dispatch;
+    chart.options = nv.utils.optionsFunc.bind(chart);
+
+    chart._options = Object.create({}, {
+        // simple options, just get/set the necessary values
+        width:   {get: function(){return width;}, set: function(_){width=_;}},
+        height:  {get: function(){return height;}, set: function(_){height=_;}},
+        forceY:  {get: function(){return forceY;}, set: function(_){forceY=_;}},
+        showValues: {get: function(){return showValues;}, set: function(_){showValues=_;}},
+        x:       {get: function(){return getX;}, set: function(_){getX=_;}},
+        y:       {get: function(){return getY;}, set: function(_){getY=_;}},
+        xScale:  {get: function(){return x;}, set: function(_){x=_;}},
+        yScale:  {get: function(){return y;}, set: function(_){y=_;}},
+        xDomain: {get: function(){return xDomain;}, set: function(_){xDomain=_;}},
+        yDomain: {get: function(){return yDomain;}, set: function(_){yDomain=_;}},
+        xRange:  {get: function(){return xRange;}, set: function(_){xRange=_;}},
+        yRange:  {get: function(){return yRange;}, set: function(_){yRange=_;}},
+        valueFormat:    {get: function(){return valueFormat;}, set: function(_){valueFormat=_;}},
+        id:          {get: function(){return id;}, set: function(_){id=_;}},
+        rectClass: {get: function(){return rectClass;}, set: function(_){rectClass=_;}},
+
+        // options that require extra logic in the setter
+        margin: {get: function(){return margin;}, set: function(_){
+            margin.top    = _.top    !== undefined ? _.top    : margin.top;
+            margin.right  = _.right  !== undefined ? _.right  : margin.right;
+            margin.bottom = _.bottom !== undefined ? _.bottom : margin.bottom;
+            margin.left   = _.left   !== undefined ? _.left   : margin.left;
+        }},
+        color:  {get: function(){return color;}, set: function(_){
+            color = nv.utils.getColor(_);
+        }},
+        duration: {get: function(){return duration;}, set: function(_){
+            duration = _;
+            renderWatch.reset(duration);
+        }}
+    });
+
+    nv.utils.initOptions(chart);
+
+    return chart;
+};
 
 nv.models.discreteBarChart = function() {
     "use strict";
@@ -2420,7 +2903,189 @@ nv.models.discreteBarChart = function() {
 
     return chart;
 }
-nv.models.packedBubbleChart = function() {
+nv.models.packedBubble = function() {
+    "use strict";
+
+    //============================================================
+    // Public Variables with Default Settings
+    //------------------------------------------------------------
+
+    var margin = {top: 0, right: 0, bottom: 0, left: 0}
+        , width = 500
+        , height = 500
+        , id = Math.floor(Math.random() * 10000) //Create semi-unique ID in case user doesn't select one
+        , color = nv.utils.defaultColor()
+        , valueFormat = function(d) { return d.value; }
+        , title = false
+        , padding = 1.5
+        , dispatch = d3.dispatch('chartClick', 'elementClick', 'elementDblClick', 'elementMouseover', 'elementMouseout', 'elementMousemove', 'renderEnd')
+        ;
+
+
+    //============================================================
+    // chart function
+    //------------------------------------------------------------
+
+    var renderWatch = nv.utils.renderWatch(dispatch);
+
+    function chart(selection) {
+        renderWatch.reset();
+
+        selection.each(function(data) {
+            var availableWidth = width - margin.left - margin.right
+                , availableHeight = height - margin.top - margin.bottom
+                , container = d3.select(this)
+                ;
+
+            nv.utils.initSVG(container);
+
+            // Setup containers and skeleton of chart
+            var wrap = container.selectAll('.nv-wrap.nv-packedBubble').data([data]);
+            var wrapEnter = wrap.enter().append('g').attr('class','nvd3 nv-wrap nv-packedBubble nv-chart-' + id);
+            var gEnter = wrapEnter.append('g');
+            gEnter.append('g').attr('class', 'nv-packedBubbleNodes');
+            var g_bubbles = wrap.selectAll('.nv-packedBubbleNodes');
+
+            wrap.attr('transform', 'translate(' + margin.left + ',' + margin.top + ')');
+
+            var root = d3.layout.pack()
+                .sort(null)
+                .size([availableWidth, availableHeight])
+                .padding(padding);
+
+            // pack nodes from data, hide children
+            var nodes = g_bubbles.selectAll(".node")
+                .data(root.nodes({ children: data }).filter(function(d) { return d.depth > 0; }))
+                .attr("transform", function(d) { return "translate(" + d.x + "," + d.y + ")"; });
+
+            var g_nodes = nodes.enter().append("g")
+                    .attr("class", function(d) { return d.children ? "node" : "leaf node"; })
+                    .attr("transform", function(d) { return "translate(" + d.x + "," + d.y + ")"; });
+
+            // draw circles
+            g_nodes.append("circle")
+                .style("fill", function(d) { return color(d.index); })
+                .filter(function(d) { return !d.children; }).style({ "visibility": "hidden", "opacity": 0 });
+
+            // set/update radius getter to support updating data (responsive width)
+            var circles = nodes.selectAll('circle')
+                .attr("r", function(d) { return d.r; });
+
+            // hook up bubble events
+            g_nodes.on('mouseover', function(d, i) {
+                d3.select(this).classed('hover', true);
+
+                dispatch.elementMouseover({
+                    data: d,
+                    index: i,
+                    color: d3.select(this).select('circle').style("fill")
+                });
+            })
+            .on('mouseout', function(d, i) {
+                d3.select(this).classed('hover', false);
+
+                dispatch.elementMouseout({
+                    data: d,
+                    index: i,
+                    color: d3.select(this).select('circle').style("fill")
+                });
+            })
+            .on('mousemove', function(d, i) {
+                dispatch.elementMousemove({
+                    data: d,
+                    index: i,
+                    color: d3.select(this).select('circle').style("fill")
+                });
+            })
+            .on('click', function(d, i) {
+                var element = this;
+
+                if (d.children) {
+                    var node = d3.select(this);
+                    var expanded = node.classed('expanded');
+
+                    node.classed('expanded', !expanded)
+                        .transition()
+                        .duration(500)
+                        .style("opacity", expanded ? 1 : 0.3);
+
+                    d3.selectAll('.node circle')
+                        .filter(function(d2) { return d2.parent.name == d.name; })
+                        .style("visibility", "visible")
+                        .transition()
+                        .duration(500)
+                        .style("opacity", expanded ? 0 : 1)
+                        .each('end', function() { d3.select(this).style('visibility', !expanded ? 'visible' : 'hidden'); });
+                }
+
+                dispatch.elementClick({
+                    data: d,
+                    index: i,
+                    color: d3.select(this).select('circle').style("fill"),
+                    event: d3.event,
+                    element: element
+                });
+
+                d3.event.stopPropagation();
+            })
+            .on('dblclick', function(d, i) {
+                dispatch.elementDblClick({
+                    data: d,
+                    index: i,
+                    color: d3.select(this).select('circle').style("fill")
+                });
+
+                d3.event.stopPropagation();
+            });
+
+            //
+            container.on('click', function(d, i) {
+                dispatch.chartClick({
+                    data: d,
+                    index: i,
+                    pos: d3.event,
+                    id: id
+                });
+            });
+        });
+
+        renderWatch.renderEnd('packedBubble immediate');
+        return chart;
+    }
+
+    //============================================================
+    // Expose Public Variables
+    //------------------------------------------------------------
+
+    chart.dispatch = dispatch;
+    chart.options = nv.utils.optionsFunc.bind(chart);
+
+    chart._options = Object.create({}, {
+        // simple options, just get/set the necessary values
+        width:      {get: function(){return width;}, set: function(_){width=_;}},
+        height:     {get: function(){return height;}, set: function(_){height=_;}},
+        title:      {get: function(){return title;}, set: function(_){title=_;}},
+        padding:      {get: function(){return padding;}, set: function(_){padding=_;}},
+        valueFormat:    {get: function(){return valueFormat;}, set: function(_){valueFormat=_;}},
+        id:         {get: function(){return id;}, set: function(_){id=_;}},
+
+
+        // options that require extra logic in the setter
+        margin: {get: function(){return margin;}, set: function(_){
+            margin.top    = typeof _.top    != 'undefined' ? _.top    : margin.top;
+            margin.right  = typeof _.right  != 'undefined' ? _.right  : margin.right;
+            margin.bottom = typeof _.bottom != 'undefined' ? _.bottom : margin.bottom;
+            margin.left   = typeof _.left   != 'undefined' ? _.left   : margin.left;
+        }},
+
+        color: {get: function(){return color;}, set: function(_){
+            color=nv.utils.getColor(_);
+        }}
+    });
+
+    nv.utils.initOptions(chart);
+    return chart;
+};nv.models.packedBubbleChart = function() {
     "use strict";
 
     //============================================================
