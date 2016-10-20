@@ -35,11 +35,12 @@ module.exports = function(grunt) {
                     'src/interactiveLayer.js',
                     'src/tooltip.js',
                     'src/utils.js',
+
                     //Include all files in src/models
                     'src/models/lineChart.js',
                     'src/models/discreteBarChart.js',
-                    'node_modules/nvd3-charts/packedBubbleChart.js'
-                    // example to exclude files: '!src/models/excludeMe*'
+                    'src/models/packedBubbleChart.js'
+
                 ],
                 dest: 'build/nv.d3.js'
             }
