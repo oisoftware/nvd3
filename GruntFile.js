@@ -37,7 +37,9 @@ module.exports = function(grunt) {
                     'src/utils.js',
 
                     //Include all files in src/models
-                    'src/models/*'
+                    'src/models/lineChart.js',
+                    'src/models/discreteBarChart.js',
+                    'src/models/packedBubbleChart.js'
 
                 ],
                 dest: 'build/nv.d3.js'
